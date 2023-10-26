@@ -2,6 +2,9 @@
 
 A utility for converting a standard Python project structure into an Ignition script library structure and back.
 
+### Recommended python IDE modules
+https://pypi.org/project/ignition-api/
+
 ## Usage
 ```
 python build.py <options>
