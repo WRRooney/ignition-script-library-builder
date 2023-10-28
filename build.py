@@ -6,14 +6,16 @@
 #
 #  Author: Will Rooney
 #
-#  Last Modified: 10/20/2023
+#  Last Modified: 10/27/2023
 #  Last Modified By: Will Rooney
 #
 
 import argparse
+import ast
 import json
 import os
 import shutil
+from collections import namedtuple
 
 
 def generate_resource_data():
@@ -36,32 +38,50 @@ def generate_resource_data():
     }
 
 
-def convert_import_statement_to_alias(statement, module):
+def get_imports(code):
+    """ 
+    https://stackoverflow.com/a/9049549
+    
+    Args:
+        code (str): Extract import statement data. 
+
+    Returns:
+        namedtuple: ("Import", ["module", "name", "alias"])
+    """
+    Import = namedtuple("Import", ["module", "name", "alias"])
+    root = ast.parse(code)
+    for node in ast.iter_child_nodes(root):
+        if isinstance(node, ast.Import):
+            module = []
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module.split('.')
+        else:
+            continue
+
+        for n in node.names:
+            yield Import(module, n.name.split('.'), n.asname)
+
+
+def import_statement_to_aliases(statement, target_module):
     """
     Convert import statements to local variable aliases for the targeted module.
 
     Args:
         statement (str): The import statement.
-        module (str): The root module that is being targeted.
+        target_module (str): The root module(s) that are being targeted.
 
     Returns:
         list[str]: List of modified import statements.
     """
-    if statement.startswith('from {}'.format(module)):
-        fq_module, funcs = statement.split(' import ')
-        fq_module = fq_module[5:]  # strip 'from ' off the fully qualified module name
-        funcs = funcs.split(',')
-        return [
-            '{0} = {1}.{0}'.format(func.strip(), fq_module)
-            for func in funcs
-        ]
-
-    if statement.startswith('import {}'.format(module)):
-        fq_module = statement.replace('import ', '')
-        library_item = fq_module.rsplit('.', 1)[-1]
-        return ['{} = {}'.format(library_item, fq_module)]
-
-    return []
+    alias_statements = []
+    for imp in get_imports(statement):
+        module = imp.module
+        module.extend(imp.name)
+        if len(module) > 1 and module[0] == target_module:
+            fq_module = '.'.join(module)
+            name = module[-1] if imp.alias is None else imp.alias
+            alias_statements.append('{} = {}'.format(name, fq_module))
+    return alias_statements
 
 
 def convert_import_statements_to_aliases(code, source_modules):
@@ -81,12 +101,18 @@ def convert_import_statements_to_aliases(code, source_modules):
     for line in code.split('\n'):
 
         # Comment out all ignition system library imports
-        for module in source_modules:
-            if line.startswith('from %s' % module) or line.startswith('import %s' % module):
-                new_lines.append('# ' + line.strip())
-                new_lines.extend(convert_import_statement_to_alias(line.strip(), module))
-                break
+        match = False
+        if line.startswith('import system.'):
+            new_lines.append('# ' + line.strip())
+            match = True
         else:
+            for module in source_modules:
+                if line.startswith('from %s' % module) or line.startswith('import %s' % module):
+                    new_lines.append('# ' + line.strip())
+                    new_lines.extend(import_statement_to_aliases(line.strip(), module))
+                    match = True
+                    break
+        if not match:
             new_lines.append(line)
     return '\n'.join(new_lines)
 
@@ -110,12 +136,16 @@ def undo_aliased_import_statements(code, source_modules):
         if line.startswith('# '):
             uncommented = line.strip()[2:]
             matched = False
-            for module in source_modules:
-                if uncommented.startswith('from %s' % module) or uncommented.startswith('import %s' % module):
-                    new_lines.append(uncommented)
-                    aliased_statements.extend(convert_import_statement_to_alias(uncommented, module))
-                    matched = True
-                    break
+            if uncommented.startswith('import system.'):
+                new_lines.append(uncommented)
+                matched = True
+            else:
+                for module in source_modules:
+                    if uncommented.startswith('from %s' % module) or uncommented.startswith('import %s' % module):
+                        new_lines.append(uncommented)
+                        aliased_statements.extend(import_statement_to_aliases(uncommented, module))
+                        matched = True
+                        break
             if not matched:
                 new_lines.append(line)
         else:
@@ -242,17 +272,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "-s", "--source",
         default=os.path.join(os.getcwd(), 'src'),
-        help="Source code folder path"
+        help="Source code folder path; the python project source code path."
     )
     parser.add_argument(
         "-d", "--destination",
-        default=os.path.join(os.getcwd(), 'ignition-data/projects/<ProjectName>/ignition/script-python'),
-        help="Output build folder path"
+        default=os.path.join(os.getcwd(), 'ignition-data/projects/$PROJECT/ignition/script-python'),
+        help="Output build folder path; the Ignition script library path."
     )
     parser.add_argument(
         "-c", "--clean",
-        default=False,
-        help="Delete all files and folders in the build folder before running, or the project folder if running a reverse build."
+        action="store_true",
+        help="First delete all files and folders in the build folder, or the project folder if a reverse build."
     )
     parser.add_argument(
         "-r", "--reverse", action="store_true",
@@ -261,7 +291,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-l', '--source_modules',
         nargs='+', default=['system'],
-        help='Define all script modules being converted to allow import statements to be converted to aliases.'
+        help='Define script modules that will be targeted to convert import statements to local aliases.'
     )
     args = parser.parse_args()
 
