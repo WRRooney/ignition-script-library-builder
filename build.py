@@ -286,12 +286,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "-s", "--source",
         default=os.path.join(os.getcwd(), 'src'),
-        help="Source code folder path; the python project source code path."
+        help="Source code folder path; the python project source code path. Defaults to `./src`"
     )
     parser.add_argument(
         "-d", "--destination",
         default=os.path.join(os.getcwd(), 'ignition-data/projects/$PROJECT/ignition/script-python'),
-        help="Output build folder path; the Ignition script library path."
+        help="Output build folder path; the Ignition script library path. Defaults to `ignition-data/projects/$PROJECT/ignition/script-python`"
     )
     parser.add_argument(
         "-c", "--clean",
