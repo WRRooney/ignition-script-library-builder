@@ -75,8 +75,7 @@ def import_statement_to_aliases(statement, target_module):
     """
     alias_statements = []
     for imp in get_imports(statement):
-        module = imp.module
-        module.extend(imp.name)
+        module = [x for x in imp.module] + imp.name
         if len(module) > 1 and module[0] == target_module:
             fq_module = '.'.join(module)
             name = module[-1] if imp.alias is None else imp.alias
