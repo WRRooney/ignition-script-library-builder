@@ -6,7 +6,7 @@
 #
 #  Author: Will Rooney
 #
-#  Last Modified: 10/27/2023
+#  Last Modified: 11/21/2023
 #  Last Modified By: Will Rooney
 #
 
@@ -157,7 +157,7 @@ def undo_aliased_import_statements(code, source_modules):
     )
 
 
-def reverse_build(project_folder, build_folder, source_modules, clean):
+def reverse_build(project_folder, build_folder, source_modules, clean, char_to_tab, tab_size):
     """
     Traverse an Ignition script library and convert it to a standard python project structure.
 
@@ -166,6 +166,8 @@ def reverse_build(project_folder, build_folder, source_modules, clean):
         build_folder (str): The source Ignition script library folder.
         source_modules (list[str]): List of root module names to target.
         clean (bool): If true, ALL FOLDERS/FILES in the project folder will be deleted before reversing the build.
+        char_to_tab (booL): If true, all tabs will be converted back to spaces.
+        tab_size (int): The number of spaces that make up a tab.
     """
     if clean:
         # Clear the contents of the project folder
@@ -188,6 +190,9 @@ def reverse_build(project_folder, build_folder, source_modules, clean):
             # Undo aliased statements
             py_code = undo_aliased_import_statements(py_code, source_modules)
 
+            if char_to_tab:
+                py_code = py_code.replace('\t', ' ' * tab_size)
+
             with open(destination_path, 'w') as py_file:
                 py_file.write(py_code)
         else:
@@ -206,7 +211,7 @@ def reverse_build(project_folder, build_folder, source_modules, clean):
     process_directory(build_folder)
 
 
-def build(project_folder, build_folder, source_modules, clean):
+def build(project_folder, build_folder, source_modules, clean, char_to_tab, tab_size):
     """
     Traverse a python project and deploy it to a build folder using the
     Ignition script library structure.
@@ -218,6 +223,8 @@ def build(project_folder, build_folder, source_modules, clean):
             *Should only be root modules meant to be converted to root Ignition script library modules and/or
              the ignition `system` API library.
         clean (bool): If true, ALL FOLDERS/FILES in the build folder will be deleted before re-deploying build.
+        char_to_tab (booL): If true, all groups of `tab_size` spaces will be converted to tabs.
+        tab_size (int): The number of spaces that make up a tab.
     """
     if clean:
         # Clear the contents of the build folder
@@ -234,6 +241,9 @@ def build(project_folder, build_folder, source_modules, clean):
 
         # Convert package level import statements to local variable aliases
         py_code = convert_import_statements_to_aliases(py_code, source_modules)
+
+        if char_to_tab:
+            py_code = py_code.replace(' ' * tab_size, '\t')
 
         # Create destination folder and save code.py
         name = os.path.basename(path)
@@ -298,12 +308,22 @@ if __name__ == "__main__":
         help='Define script modules that will be targeted to convert import statements to local aliases. Defaults to '
              'modules found in project.'
     )
+    parser.add_argument(
+        't', '--char_to_tab',
+        action="store_true",
+        help='Tab size; number of spaces for a tab.'
+    )
+    parser.add_argument(
+        '-n', '--tab_size',
+        default=4,
+        help='Tab size; number of spaces for a tab.'
+    )
     args = parser.parse_args()
 
     source = os.path.abspath(args.source)
     destination = os.path.abspath(args.destination)
 
     if args.reverse:
-        reverse_build(source, destination, args.source_modules, args.clean)
+        reverse_build(source, destination, args.source_modules, args.clean, args.char_to_tab, args.tab_size)
     else:
-        build(source, destination, args.source_modules, args.clean)
+        build(source, destination, args.source_modules, args.clean, args.char_to_tab, args.tab_size)
