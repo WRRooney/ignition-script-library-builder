@@ -311,12 +311,12 @@ if __name__ == "__main__":
     parser.add_argument(
         '-t', '--char_to_tab',
         action="store_true",
-        help='Tab size; number of spaces for a tab.'
+        help='Enable conversion of source spaced indentation to tabs for Ignition script library.'
     )
     parser.add_argument(
         '-n', '--tab_size',
         default=4,
-        help='Tab size; number of spaces for a tab.'
+        help='Number of spaces for that make up a tab.'
     )
     args = parser.parse_args()
 
