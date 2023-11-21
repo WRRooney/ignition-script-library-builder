@@ -266,6 +266,11 @@ def build(project_folder, build_folder, source_modules, clean):
 
 if __name__ == "__main__":
 
+    default_modules = [
+        item for item in os.listdir(default_source)
+        if os.path.isdir(os.path.join(default_source, item))
+    ]
+    
     parser = argparse.ArgumentParser(description="Build project to Ignition's script library.")
 
     parser.add_argument(
@@ -289,8 +294,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         '-l', '--source_modules',
-        nargs='+', default=['system'],
-        help='Define script modules that will be targeted to convert import statements to local aliases.'
+        nargs='+', default=default_modules,
+        help='Define script modules that will be targeted to convert import statements to local aliases. Defaults to '
+             'modules found in project.'
     )
     args = parser.parse_args()
 
