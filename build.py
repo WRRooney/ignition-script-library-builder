@@ -309,7 +309,7 @@ if __name__ == "__main__":
              'modules found in project.'
     )
     parser.add_argument(
-        't', '--char_to_tab',
+        '-t', '--char_to_tab',
         action="store_true",
         help='Tab size; number of spaces for a tab.'
     )
