@@ -15,7 +15,9 @@ python build.py <options>
 - `-d, --destination` Output build folder path; the Ignition script library path.
 - `-r, --reverse` Convert an Ignition script library back into a python project.
 - `-c, --clean` Before running the conversion delete all files and folders in the build folder, or the project folder if running a reverse build.
-- `-l, --source_modules` Define script modules that will be targeted to convert import statements to local aliases.
+- `-l, --source_modules` Define script modules that will be targeted to convert import statements to local aliases. Defaults to modules found in project.
+- `-t, --char_to_tab` Enable conversion of source spaced indentation to tabs for Ignition script library.
+- `-n, --tab_size` Number of spaces for that make up a tab. 
 
 ### Example
 
