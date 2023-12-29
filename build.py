@@ -6,7 +6,7 @@
 #
 #  Author: Will Rooney
 #
-#  Last Modified: 11/21/2023
+#  Last Modified: 12/29/2023
 #  Last Modified By: Will Rooney
 #
 
@@ -14,8 +14,12 @@ import argparse
 import ast
 import json
 import os
+import re
 import shutil
+import traceback
 from collections import namedtuple
+
+TAB_INDENT = 4
 
 
 def generate_resource_data():
@@ -60,6 +64,23 @@ def get_imports(code):
 
         for n in node.names:
             yield Import(module, n.name.split('.'), n.asname)
+
+
+def is_import_statement(line, target_modules):
+    """
+    Check if the statement is an import statement for the targeted module.
+
+    Args:
+        line (str): The line to check.
+        target_modules (list[str]): List of root module names to target.
+
+    Returns:
+        bool: True if the statement is an import statement for the targeted module.
+    """
+    for target_module in target_modules:
+        if line.startswith('from %s' % target_module) or line.startswith('import %s' % target_module):
+            return True
+    return False
 
 
 def import_statement_to_aliases(statement, target_module):
@@ -157,6 +178,237 @@ def undo_aliased_import_statements(code, source_modules):
     )
 
 
+def split_statement_by_quoted_strings(statement):
+    quote_chars = "'\""
+    if not any(x in statement for x in quote_chars):
+        return [statement]
+
+    in_escape = False
+    quoted_indexes = []  # (start, end)
+    start = None
+    for i, c in enumerate(statement):
+        if start is not None and not in_escape and c == '\\':
+            in_escape = True
+            continue
+
+        if start is not None and not in_escape and c in quote_chars:
+            quoted_indexes.append((start, i))
+            start = None
+            continue
+
+        if start is not None and in_escape and c in quote_chars:
+            in_escape = False
+            continue
+
+        if start is None and c in quote_chars:
+            start = i
+            continue
+    # Split the statement into parts that are quoted and not quoted
+    parts = []
+    last_end = 0
+    for start, end in quoted_indexes:
+        parts.append(statement[last_end:start])
+        parts.append(statement[start:end + 1])
+        last_end = end + 1
+    parts.append(statement[last_end:])
+    return parts if len(parts) else [statement]
+
+
+def replace_reference(code, find, replace):
+    """
+    Replace all instances of a reference in the code. Must match entire word/reference.
+
+    Args:
+        code (str): The contents of the python code.
+        find (str): The word to find.
+        replace (str): The word to replace with.
+
+    Returns:
+        str: The modified code.
+    """
+    pattern = re.compile(r'\b' + re.escape(find) + r'\b')
+
+    modified_lines = []
+    multiline_quote = False
+    quote_chars = "'\""
+    for line in code.split('\n'):
+
+        # Check if line is part of a multiline string
+        if multiline_quote:
+            parts = line.split('"""')
+            # First part of line is part of multiline string
+            # Replace the pattern on odd indexes of the parts list
+            for i, part in enumerate(parts):
+                if i % 2 == 1:
+                    # Split the part into parts that are quoted and not quoted
+                    sub_parts = split_statement_by_quoted_strings(part)
+                    # Replace the pattern on even indexes of the sub_parts list
+                    for j, sub_part in enumerate(sub_parts):
+                        if j % 2 == 0:
+                            sub_parts[j] = pattern.sub(replace, sub_part)
+                    parts[i] = ''.join(sub_parts)
+
+            # If the last part of the line is part of multiline string
+            # then the line is still part of multiline string
+            if len(parts) % 2 != 1:
+                multiline_quote = False
+
+            modified_lines.append('"""'.join(parts))
+            continue
+
+        elif not line.strip().startswith('#') and '"""' in line:
+            parts = line.split('"""')
+            # First part of line is not part of multiline string
+            # Replace the pattern on even indexes of the parts list
+            for i, part in enumerate(parts):
+                if i % 2 == 0:
+                    # Split the part into parts that are quoted and not quoted
+                    sub_parts = split_statement_by_quoted_strings(part)
+                    # Replace the pattern on even indexes of the sub_parts list
+                    for j, sub_part in enumerate(sub_parts):
+                        if j % 2 == 0:
+                            sub_parts[j] = pattern.sub(replace, sub_part)
+                    parts[i] = ''.join(sub_parts)
+            # If the last part of the line is not part of multiline string
+            # then the line is not part of multiline string
+            if len(parts) % 2 != 1:
+                multiline_quote = True
+
+            modified_lines.append('"""'.join(parts))
+            continue
+
+        # Ignore comments
+        if line.strip().startswith('#'):
+            modified_lines.append(line)
+            continue
+
+        # Split the line into parts that are quoted and not quoted
+        parts = split_statement_by_quoted_strings(line)
+        # Even indexes are not quoted, odd indexes are quoted
+        # Replace the pattern on even indexes of the parts list
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                parts[i] = pattern.sub(replace, part)
+        modified_lines.append(''.join(parts))
+
+    return '\n'.join(modified_lines)
+
+
+def replace_import_statements_with_direct_references(code, source_modules):
+    """
+    Process the lines to find targeted import statements and adjust all usage to use direct references instead.
+
+    Args:
+        code (str): The contents of the python code.
+        source_modules (list[str]): List of root module names to target.
+            *Should only be root modules meant to be converted to root Ignition script library modules and/or
+             the ignition `system` API library.
+
+    Returns:
+        str: The modified code.
+    """
+    new_lines = []
+    replacements = {}
+    multi_line_import = None
+    for line in code.split('\n'):
+
+        # Comment out all ignition system library imports
+        match = False
+        if line.startswith('import system.'):
+            new_lines.append('# ' + line.strip())
+            match = True
+        else:
+            if multi_line_import is not None:
+                # Flatten import statement to single line; irreversible
+                if line.strip().endswith('\\'):
+                    multi_line_import += line.strip()[:-1]
+                    continue
+                else:
+                    line = multi_line_import + line.strip()
+                    multi_line_import = None
+
+            if multi_line_import is None and is_import_statement(line.strip(), source_modules):
+                match = True
+
+                if line.strip().endswith('\\'):
+                    line = line.strip()[:-1]
+                    multi_line_import = line
+                    continue
+
+                new_lines.append('# ' + line.strip())
+
+                # Keep track of all imports that need to be used to replace objects with direct references.
+                for imp in get_imports(line.strip()):
+                    module = [x for x in imp.module] + imp.name
+                    if len(module) > 1 and module[0] in source_modules:
+                        fq_module = '.'.join(module)
+                        name = module[-1] if imp.alias is None else imp.alias
+                        replacements[name] = fq_module
+
+        if not match:
+            new_lines.append(line)
+
+    new_lines = '\n'.join(new_lines)
+
+    # Replace all references to the aliased imports with direct references
+    for name, fq_module in replacements.items():
+        new_lines = replace_reference(new_lines, name, fq_module)
+
+    return new_lines
+
+
+def undo_replace_import_statements_with_direct_references(code, source_modules):
+    """
+    Process the lines to find targeted import statements and undo direct references put in place.
+    * Requires original modifications to be intact or the pattern followed if changes are made from
+      within the Ignition script library.
+
+    Args:
+        code (str): The contents of the python code.
+        source_modules (list[str]): List of root module names to target.
+
+    Returns:
+        str: The modified code.
+    """
+    new_lines = []
+    replacements = {}
+    for line in code.split('\n'):
+        if line.startswith('# '):
+            uncommented = line.strip()[2:]
+            match = False
+            if uncommented.startswith('import system.'):
+                new_lines.append(uncommented)
+                match = True
+            else:
+                for target_module in source_modules:
+                    if uncommented.startswith('from %s' % target_module) or uncommented.startswith('import %s' % target_module):
+                        new_lines.append(uncommented)
+                        match = True
+
+                        # Keep track of all imports that need to be used to replace objects with direct references.
+                        for imp in get_imports(line.strip()):
+                            module = [x for x in imp.module] + imp.name
+                            if len(module) > 1 and module[0] == target_module:
+                                fq_module = '.'.join(module)
+                                name = module[-1] if imp.alias is None else imp.alias
+                                replacements[name] = fq_module
+
+                        break
+
+            if not match:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    new_lines = '\n'.join(new_lines)
+
+    # Replace all direct references with the aliased import names
+    for name, fq_module in replacements.items():
+        new_lines = replace_reference(new_lines, fq_module, name)
+
+    return new_lines
+
+
 def reverse_build(project_folder, build_folder, source_modules, clean, char_to_tab, tab_size):
     """
     Traverse an Ignition script library and convert it to a standard python project structure.
@@ -188,7 +440,13 @@ def reverse_build(project_folder, build_folder, source_modules, clean, char_to_t
             py_code = py_code.replace('# CODING=', '# coding=', 1)
 
             # Undo aliased statements
-            py_code = undo_aliased_import_statements(py_code, source_modules)
+            # py_code = undo_aliased_import_statements(py_code, source_modules)
+
+            # Undo direct references
+            try:
+                py_code = undo_replace_import_statements_with_direct_references(py_code, source_modules)
+            except SyntaxError:
+                raise SyntaxError('{}: {}'.format(traceback.format_exc(), source_path))
 
             if char_to_tab:
                 py_code = py_code.replace('\t', ' ' * tab_size)
@@ -240,7 +498,13 @@ def build(project_folder, build_folder, source_modules, clean, char_to_tab, tab_
         py_code = py_code.replace('# coding=', '# CODING=', 1)
 
         # Convert package level import statements to local variable aliases
-        py_code = convert_import_statements_to_aliases(py_code, source_modules)
+        # py_code = convert_import_statements_to_aliases(py_code, source_modules)
+
+        # Convert import statements to direct references
+        try:
+            py_code = replace_import_statements_with_direct_references(py_code, source_modules)
+        except SyntaxError:
+            raise SyntaxError('{}: {}'.format(traceback.format_exc(), path))
 
         if char_to_tab:
             py_code = py_code.replace(' ' * tab_size, '\t')
@@ -276,22 +540,24 @@ def build(project_folder, build_folder, source_modules, clean, char_to_tab, tab_
 
 if __name__ == "__main__":
 
+    default_source = os.path.join(os.getcwd(), 'src')
+    default_destination = os.path.join(os.getcwd(), 'ignition-data/projects/$PROJECT/ignition/script-python')
     default_modules = [
         item for item in os.listdir(default_source)
         if os.path.isdir(os.path.join(default_source, item))
     ]
-    
+
     parser = argparse.ArgumentParser(description="Build project to Ignition's script library.")
 
     parser.add_argument(
         "-s", "--source",
-        default=os.path.join(os.getcwd(), 'src'),
-        help="Source code folder path; the python project source code path. Defaults to `./src`"
+        default=default_source,
+        help="Source code folder path; the python project source code path."
     )
     parser.add_argument(
         "-d", "--destination",
-        default=os.path.join(os.getcwd(), 'ignition-data/projects/$PROJECT/ignition/script-python'),
-        help="Output build folder path; the Ignition script library path. Defaults to `ignition-data/projects/$PROJECT/ignition/script-python`"
+        default=default_destination,
+        help="Output build folder path; the Ignition script library path."
     )
     parser.add_argument(
         "-c", "--clean",
@@ -309,21 +575,23 @@ if __name__ == "__main__":
              'modules found in project.'
     )
     parser.add_argument(
-        '-t', '--char_to_tab',
-        action="store_true",
-        help='Enable conversion of source spaced indentation to tabs for Ignition script library.'
-    )
-    parser.add_argument(
         '-n', '--tab_size',
         default=4,
         help='Number of spaces for that make up a tab.'
     )
+    # Add argument to disable the conversion of tabs to spaces. 
+    parser.add_argument(
+        '-t', '--no_char_to_tab',
+        action='store_true',
+        help='Disable the conversion of tabs to spaces.'
+    )
+   
     args = parser.parse_args()
 
     source = os.path.abspath(args.source)
     destination = os.path.abspath(args.destination)
 
     if args.reverse:
-        reverse_build(source, destination, args.source_modules, args.clean, args.char_to_tab, args.tab_size)
+        reverse_build(source, destination, args.source_modules, args.clean, not args.no_char_to_tab, args.tab_size)
     else:
-        build(source, destination, args.source_modules, args.clean, args.char_to_tab, args.tab_size)
+        build(source, destination, args.source_modules, args.clean, not args.no_char_to_tab, args.tab_size)
