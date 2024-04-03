@@ -233,6 +233,10 @@ def replace_reference(code, find, replace):
     quote_chars = "'\""
     for line in code.split('\n'):
 
+        if line.strip().startswith('from') or line.strip().startswith('import'):
+            modified_lines.append(line)
+            continue
+
         # Check if line is part of a multiline string
         if multiline_quote:
             parts = line.split('"""')
